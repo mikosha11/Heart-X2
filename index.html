@@ -1,0 +1,410 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Heart Dust (Lightweight 1500)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Jost:wght@300;400&display=swap">
+<style>
+  :root {
+    --stage:        #07060a;
+    --stage-lift:   #0c0812;
+    --dust-pale:    #ffe1ee;
+    --dust-mid:     #ff8ab8;
+    --dust-hot:     #f4478f;
+    --dust-deep:    #b31f5e;
+    --ink:          #e8dbe4;
+    --ink-dim:      #7d6f7a;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background: var(--stage);
+    color: var(--ink);
+    font-family: "Jost", "Avenir Next", system-ui, sans-serif;
+    overflow: hidden;
+  }
+
+  .stage {
+    position: fixed;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    background: radial-gradient(120% 90% at 50% 52%, var(--stage-lift) 0%, var(--stage) 62%);
+  }
+
+  canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+
+  .controls {
+    position: fixed;
+    left: 50%;
+    bottom: clamp(18px, 4vh, 40px);
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    opacity: 0;
+    transition: opacity 900ms ease;
+  }
+  .controls.show { opacity: 1; }
+
+  button.replay {
+    appearance: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    padding: 9px 18px 9px 15px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 138, 184, 0.28);
+    background: rgba(255, 138, 184, 0.07);
+    color: var(--dust-pale);
+    font: 300 12px/1 "Jost", system-ui, sans-serif;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: background 260ms ease, border-color 260ms ease, color 260ms ease;
+  }
+  button.replay:hover {
+    background: rgba(255, 138, 184, 0.16);
+    border-color: rgba(255, 138, 184, 0.55);
+    color: #fff;
+  }
+  button.replay:focus-visible {
+    outline: 2px solid var(--dust-mid);
+    outline-offset: 3px;
+  }
+  button.replay svg { width: 13px; height: 13px; fill: currentColor; }
+
+  .mark {
+    position: fixed;
+    top: clamp(16px, 3.4vh, 32px);
+    left: 0;
+    right: 0;
+    text-align: center;
+    font-size: clamp(10px, 1.4vw, 12px);
+    font-weight: 300;
+    letter-spacing: 0.42em;
+    text-transform: uppercase;
+    color: var(--ink-dim);
+    opacity: 0;
+    transition: opacity 1400ms ease;
+    pointer-events: none;
+  }
+  .mark.show { opacity: 0.75; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .controls, .mark { transition: none; }
+  }
+</style>
+
+</head><body><div class="stage">
+  <canvas id="c" aria-label="Pink dust particles spreading from the centre to form a heart"></canvas>
+</div>
+
+<p class="mark" id="mark">Heart Dust</p>
+
+<div class="controls" id="controls">
+  <button class="replay" id="replay" type="button">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5V1L7 6l5 5V7a5 5 0 1 1-5 5H5a7 7 0 1 0 7-7z"/></svg>
+    Replay
+  </button>
+</div>
+
+<script>
+(() => {
+  "use strict";
+
+  const canvas   = document.getElementById("c");
+  const ctx      = canvas.getContext("2d", { alpha: true });
+  const controls = document.getElementById("controls");
+  const mark     = document.getElementById("mark");
+  const replayEl = document.getElementById("replay");
+
+  const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  const TINTS = [
+    { hex: "#ffe9f3", w: 0.06 },
+    { hex: "#ffc2dc", w: 0.16 },
+    { hex: "#ff8ab8", w: 0.32 },
+    { hex: "#f4478f", w: 0.28 },
+    { hex: "#d32d6f", w: 0.13 },
+    { hex: "#8e1447", w: 0.05 }
+  ];
+  const BG = [7, 6, 10];
+
+  const SPRITE = 48;
+  const sprites = TINTS.map(t => {
+    const s = document.createElement("canvas");
+    s.width = s.height = SPRITE;
+    const g = s.getContext("2d");
+    const grad = g.createRadialGradient(SPRITE/2, SPRITE/2, 0, SPRITE/2, SPRITE/2, SPRITE/2);
+    const c = t.hex;
+    grad.addColorStop(0.00, hexA(c, 1));
+    grad.addColorStop(0.14, hexA(c, 0.82));
+    grad.addColorStop(0.34, hexA(c, 0.30));
+    grad.addColorStop(0.62, hexA(c, 0.07));
+    grad.addColorStop(1.00, hexA(c, 0));
+    g.fillStyle = grad;
+    g.fillRect(0, 0, SPRITE, SPRITE);
+    return s;
+  });
+
+  function hexA(hex, a) {
+    const n = parseInt(hex.slice(1), 16);
+    return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+  }
+
+  function pickTint() {
+    let r = Math.random(), acc = 0;
+    for (let i = 0; i < TINTS.length; i++) { acc += TINTS[i].w; if (r <= acc) return i; }
+    return TINTS.length - 1;
+  }
+
+  function heartPoint(t) {
+    const x = 16 * Math.pow(Math.sin(t), 3);
+    const y = -(13 * Math.cos(t) - 5 * Math.cos(2*t) - 2 * Math.cos(3*t) - Math.cos(4*t));
+    return [x, y];
+  }
+
+  function buildOutline(steps) {
+    const pts = new Float64Array(steps * 2);
+    const cum = new Float64Array(steps);
+    let len = 0;
+    for (let i = 0; i < steps; i++) {
+      const t = (i / (steps - 1)) * Math.PI * 2;
+      const [x, y] = heartPoint(t);
+      pts[i*2] = x; pts[i*2+1] = y;
+      if (i > 0) {
+        len += Math.hypot(x - pts[(i-1)*2], y - pts[(i-1)*2+1]);
+      }
+      cum[i] = len;
+    }
+    return { pts, cum, total: len, steps };
+  }
+
+  const OUTLINE = buildOutline(4000);
+
+  function sampleAt(s) {
+    const { pts, cum, steps } = OUTLINE;
+    let lo = 0, hi = steps - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (cum[mid] < s) lo = mid + 1; else hi = mid;
+    }
+    const i = Math.max(1, lo);
+    const seg = cum[i] - cum[i-1] || 1e-6;
+    const f = (s - cum[i-1]) / seg;
+    const x = pts[(i-1)*2] + (pts[i*2] - pts[(i-1)*2]) * f;
+    const y = pts[(i-1)*2+1] + (pts[i*2+1] - pts[(i-1)*2+1]) * f;
+    let tx = pts[i*2] - pts[(i-1)*2];
+    let ty = pts[i*2+1] - pts[(i-1)*2+1];
+    const m = Math.hypot(tx, ty) || 1e-6;
+    return { x, y, nx: -ty / m, ny: tx / m };
+  }
+
+  function gauss() {
+    return (Math.random() + Math.random() + Math.random() + Math.random() - 2) / 1.2;
+  }
+
+  let W = 0, H = 0, DPR = 1, cx = 0, cy = 0, scale = 1;
+  let P = null, N = 0;
+  let start = 0, settleAt = 0, raf = 0;
+  let uiShown = false;
+
+  // Уменьшено до 1500
+  function particleCount() {
+    return 1500; 
+  }
+
+  function build() {
+    N = particleCount();
+    P = {
+      sx: new Float32Array(N), sy: new Float32Array(N),
+      c1x: new Float32Array(N), c1y: new Float32Array(N),
+      tx: new Float32Array(N), ty: new Float32Array(N),
+      delay: new Float32Array(N), dur: new Float32Array(N),
+      size: new Float32Array(N), alpha: new Float32Array(N),
+      tint: new Uint8Array(N),
+      ph: new Float32Array(N), fr: new Float32Array(N), amp: new Float32Array(N)
+    };
+
+    // Увеличиваем ширину "облака" пыли, чтобы сердце не было тонким
+    const band = 3.5; 
+    const total = OUTLINE.total;
+
+    for (let i = 0; i < N; i++) {
+      const frac = i / N;
+      const s = (frac + (Math.random() - 0.5) * (1 / N) * 3) * total;
+      const p = sampleAt(Math.max(0, Math.min(total - 1e-4, s)));
+
+      let off = gauss() * band;
+      if (Math.random() < 0.10) off += (Math.random() < 0.62 ? 1 : -1) * Math.random() * band * 2.6;
+      const jitterT = (Math.random() - 0.5) * 0.55;
+
+      P.tx[i] = p.x + p.nx * off + (-p.ny) * jitterT;
+      P.ty[i] = p.y + p.ny * off + (p.nx) * jitterT;
+
+      const a0 = Math.random() * Math.PI * 2;
+      const r0 = Math.pow(Math.random(), 2) * 0.9;
+      P.sx[i] = Math.cos(a0) * r0;
+      P.sy[i] = Math.sin(a0) * r0;
+
+      const bend = (Math.random() - 0.5) * 0.55;
+      const mx = P.tx[i] * 0.46, my = P.ty[i] * 0.46;
+      P.c1x[i] = mx * Math.cos(bend) - my * Math.sin(bend);
+      P.c1y[i] = mx * Math.sin(bend) + my * Math.cos(bend);
+
+      P.delay[i] = frac * 1.55 + Math.random() * 0.95;
+      P.dur[i]   = 1.7 + Math.random() * 1.9;
+
+      const big = Math.random() < 0.05; // Чуть больше крупных частиц
+      
+      // Сильно увеличиваем размер частиц, чтобы компенсировать их малое количество
+      P.size[i]  = big ? 12 + Math.random() * 10 : 6 + Math.pow(Math.random(), 1.5) * 7;
+      
+      // Делаем их ярче
+      P.alpha[i] = big ? 0.9 : 0.6 + Math.random() * 0.4;
+      
+      P.tint[i]  = pickTint();
+
+      P.ph[i]  = Math.random() * Math.PI * 2;
+      P.fr[i]  = 0.5 + Math.random() * 1.5;
+      P.amp[i] = 0.35 + Math.random() * 1.5;
+    }
+
+    let last = 0;
+    for (let i = 0; i < N; i++) last = Math.max(last, P.delay[i] + P.dur[i]);
+    settleAt = last;
+  }
+
+  function resize() {
+    DPR = Math.min(window.devicePixelRatio || 1, 1.5);
+    W = window.innerWidth;
+    H = window.innerHeight;
+    canvas.width = Math.round(W * DPR);
+    canvas.height = Math.round(H * DPR);
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    cx = W / 2;
+    cy = H * 0.475;
+    scale = Math.min(W / 55, H / 55);
+  }
+
+  const easeInOutQuad = t => t < 0.5 ? 2*t*t : 1 - Math.pow(-2*t + 2, 2) / 2;
+
+  function draw(now) {
+    const time = (now - start) / 1000;
+    const done = time > settleAt;
+
+    const fade = done ? 1 : 0.42 + 0.5 * Math.min(1, time / settleAt);
+    ctx.globalCompositeOperation = "source-over";
+    if (fade >= 0.985) {
+      ctx.clearRect(0, 0, W, H);
+    } else {
+      ctx.fillStyle = `rgba(${BG[0]},${BG[1]},${BG[2]},${fade})`;
+      ctx.fillRect(0, 0, W, H);
+    }
+
+    if (time < 2.2) {
+      const k = Math.max(0, 1 - time / 2.2);
+      const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, 70 * (0.4 + k));
+      g.addColorStop(0, `rgba(255,175,212,${0.16 * k})`);
+      g.addColorStop(1, "rgba(255,138,184,0)");
+      ctx.globalCompositeOperation = "lighter";
+      ctx.fillStyle = g;
+      ctx.fillRect(cx - 130, cy - 130, 260, 260);
+    }
+
+    ctx.globalCompositeOperation = "lighter";
+
+    const breathe = done ? 1 + Math.sin(time * 0.55) * 0.006 : 1;
+    const sc = scale * breathe;
+
+    for (let i = 0; i < N; i++) {
+      let u = (time - P.delay[i]) / P.dur[i];
+      if (u <= 0) continue;
+      let x, y, a = P.alpha[i], sz = P.size[i];
+
+      if (u >= 1) {
+        x = P.tx[i]; y = P.ty[i];
+        const w = Math.sin(time * P.fr[i] + P.ph[i]);
+        const w2 = Math.cos(time * P.fr[i] * 0.66 + P.ph[i]);
+        x += (w * P.amp[i]) / sc * 1.6;
+        y += (w2 * P.amp[i]) / sc * 1.6;
+        a *= 0.80 + 0.20 * (0.5 + 0.5 * w);
+      } else {
+        const e = easeInOutQuad(u);
+        const inv = 1 - e;
+        x = inv*inv*P.sx[i] + 2*inv*e*P.c1x[i] + e*e*P.tx[i];
+        y = inv*inv*P.sy[i] + 2*inv*e*P.c1y[i] + e*e*P.ty[i];
+        a *= Math.min(1, u * 4);
+        sz *= 0.72 + 0.28 * e;
+      }
+
+      const px = cx + x * sc;
+      const py = cy + y * sc;
+      const half = sz * 0.5;
+      ctx.globalAlpha = a;
+      ctx.drawImage(sprites[P.tint[i]], px - half, py - half, sz, sz);
+    }
+
+    ctx.globalAlpha = 1;
+
+    if (!uiShown && time > settleAt * 0.62) {
+      uiShown = true;
+      controls.classList.add("show");
+      mark.classList.add("show");
+    }
+
+    raf = requestAnimationFrame(draw);
+  }
+
+  function drawStatic() {
+    ctx.globalCompositeOperation = "source-over";
+    ctx.clearRect(0, 0, W, H);
+    ctx.globalCompositeOperation = "lighter";
+    for (let i = 0; i < N; i++) {
+      const sz = P.size[i];
+      ctx.globalAlpha = P.alpha[i];
+      ctx.drawImage(sprites[P.tint[i]],
+        cx + P.tx[i] * scale - sz/2, cy + P.ty[i] * scale - sz/2, sz, sz);
+    }
+    ctx.globalAlpha = 1;
+    controls.classList.add("show");
+    mark.classList.add("show");
+  }
+
+  function run() {
+    cancelAnimationFrame(raf);
+    controls.classList.remove("show");
+    mark.classList.remove("show");
+    uiShown = false;
+    resize();
+    build();
+    ctx.globalCompositeOperation = "source-over";
+    ctx.clearRect(0, 0, W, H);
+    if (reduced) { drawStatic(); return; }
+    start = performance.now();
+    raf = requestAnimationFrame(draw);
+  }
+
+  let rt = 0;
+  window.addEventListener("resize", () => {
+    clearTimeout(rt);
+    rt = setTimeout(run, 200);
+  });
+
+  replayEl.addEventListener("click", run);
+
+  run();
+})();
+</script></body>
+</html>
